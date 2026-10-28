@@ -510,12 +510,19 @@ export function saveCurrentAccountState(
 
   saveAccountsRegistry(registry);
 
-  // Sync to remote Supabase database if configured
-  try {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      supabase.from('profiles').upsert({
-        id: state.profile.id,
+  // Sync only when Supabase Auth has a real authenticated user.
+  // Local/demo IDs such as "student_..." are not UUIDs and cannot be used
+  // as profiles.id because that column references auth.users(id).
+  void (async () => {
+    try {
+      const supabase = getSupabaseClient();
+      if (!supabase) return;
+
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) return;
+
+      const { error } = await supabase.from('profiles').upsert({
+        id: user.id,
         name: state.profile.name,
         username: state.profile.username,
         xp: state.profile.xp,
@@ -524,11 +531,13 @@ export function saveCurrentAccountState(
         gems: state.profile.gems,
         hearts: state.profile.hearts,
         current_streak: state.profile.currentStreak,
-      }).then(() => {});
+      }, { onConflict: 'id' });
+
+      if (error) console.error('Supabase profile sync failed:', error.message);
+    } catch (err) {
+      console.error('Supabase profile sync failed:', err);
     }
-  } catch (err) {
-    // Non-blocking
-  }
+  })();
 }
 
 /**
