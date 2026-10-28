@@ -1,0 +1,6 @@
+{
+  "name": "Kids Center Pro - Mental Math & Soroban Learning Path",
+  "description": "Gamified Duolingo-style learning journey for Soroban mental arithmetic with 50-question rapid exams, energy hearts, Roblox avatars, and teacher dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
