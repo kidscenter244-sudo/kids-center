@@ -19,8 +19,7 @@ import {
   INITIAL_STUDENT_PROFILE, 
   INITIAL_PROGRESS, 
   DAILY_QUESTS, 
-  ACHIEVEMENTS, 
-  LEADERBOARD_USERS 
+  ACHIEVEMENTS 
 } from './data/mockData';
 import { Header } from './components/Header';
 import { SidebarNav } from './components/Navigation/SidebarNav';
@@ -42,6 +41,7 @@ import {
   logoutCurrentSession,
   createAllUnlockedProgress 
 } from './services/accountStore';
+import { getSupabaseClient } from './services/supabase';
 
 export default function App() {
   // 1. Initial 5-Second Splash Screen
@@ -97,6 +97,44 @@ export default function App() {
   const [achievements, setAchievements] = useState<Achievement[]>(ACHIEVEMENTS);
   const [activeUnitId, setActiveUnitId] = useState<string>(activeAccount?.activeUnitId || units[0]?.id || 'unit-simple');
   const [activeTab, setActiveTab] = useState<string>('path');
+  const [realLeaderboardUsers, setRealLeaderboardUsers] = useState<import('./types').LeaderboardUser[]>([]);
+
+  // Only show students actually present in Supabase; never show seeded/demo leaderboard users.
+  useEffect(() => {
+    let cancelled = false;
+    const loadRealLeaderboard = async () => {
+      const supabase = getSupabaseClient();
+      if (!supabase) {
+        if (!cancelled) setRealLeaderboardUsers([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id,username,name,avatar_id,avatar_color,xp,current_streak,role')
+        .eq('role', 'student')
+        .order('xp', { ascending: false })
+        .limit(100);
+      if (error) {
+        console.error('Could not load real leaderboard:', error.message);
+        if (!cancelled) setRealLeaderboardUsers([]);
+        return;
+      }
+      if (!cancelled) {
+        setRealLeaderboardUsers((data || []).map((row: any) => ({
+          id: row.id,
+          name: row.name || row.username || 'Student',
+          avatarId: row.avatar_id || 'roblox_char',
+          avatarColor: row.avatar_color || '#10B981',
+          xpThisWeek: Number(row.xp || 0),
+          streak: Number(row.current_streak || 0),
+          league: 'Gold' as const,
+          isCurrentUser: row.id === profile.id,
+        })));
+      }
+    };
+    void loadRealLeaderboard();
+    return () => { cancelled = true; };
+  }, [profile.id, profile.xp, profile.currentStreak]);
   const [activeLessonForPlayer, setActiveLessonForPlayer] = useState<Lesson | null>(null);
 
   // Sync state continuously to user's persistent account
@@ -392,7 +430,7 @@ export default function App() {
 
           {activeTab === 'leaderboard' && (
             <LeaderboardView
-              users={LEADERBOARD_USERS}
+              users={realLeaderboardUsers}
               profile={profile}
             />
           )}
