@@ -95,10 +95,30 @@ function getAccountsRegistry(): Record<string, UserAccountData> {
 
 function saveAccountsRegistry(registry: Record<string, UserAccountData>) {
   if (typeof window === 'undefined') return;
+
+  // Store account-specific state only. Curriculum units are shared application data;
+  // copying the entire curriculum into every account grows localStorage until it fails.
+  const compactRegistry: Record<string, UserAccountData> = {};
+  Object.entries(registry).forEach(([key, account]) => {
+    const compactAccount = { ...account };
+    delete compactAccount.units;
+    compactRegistry[key] = compactAccount;
+  });
+
   try {
-    localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(registry));
-  } catch (e) {
-    console.error('Failed to save accounts registry:', e);
+    localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(compactRegistry));
+  } catch (error) {
+    // Preserve student profile and lesson progress; drop only optional purchase history as fallback.
+    const reducedRegistry: Record<string, UserAccountData> = {};
+    Object.entries(compactRegistry).forEach(([key, account]) => {
+      reducedRegistry[key] = { ...account, purchasedItemIds: [] };
+    });
+    try {
+      localStorage.setItem(STORAGE_KEY_ACCOUNTS, JSON.stringify(reducedRegistry));
+      console.warn('Account registry saved without optional purchase history because browser storage is nearly full.');
+    } catch (retryError) {
+      console.error('Account registry still exceeds browser storage quota; cloud persistence is required.', retryError);
+    }
   }
 }
 
