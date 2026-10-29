@@ -175,7 +175,18 @@ export default function App() {
       }
     };
     void loadRealLeaderboard();
-    return () => { cancelled = true; };
+    const refreshTimer = window.setInterval(() => { void loadRealLeaderboard(); }, 5000);
+    const supabase = getSupabaseClient();
+    const channel = supabase?.channel('leaderboard-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+        void loadRealLeaderboard();
+      })
+      .subscribe();
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
+      if (channel) void supabase?.removeChannel(channel);
+    };
   }, [profile.id, profile.xp, profile.currentStreak]);
   const [activeLessonForPlayer, setActiveLessonForPlayer] = useState<Lesson | null>(null);
 
