@@ -404,7 +404,7 @@ export async function loginWithEmail(
         .select('item_id')
         .eq('student_id', user.id);
       if (inventoryError) console.error('Could not load cloud inventory:', inventoryError.message);
-      if (inventory) purchasedItemIds = inventory.map((row: any) => row.item_id);
+      if (inventory?.length) purchasedItemIds = inventory.map((row: any) => row.item_id);
 
       const account: UserAccountData = {
         ...(localAccount || {}),
