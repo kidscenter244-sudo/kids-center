@@ -306,52 +306,140 @@ export async function loginWithEmail(
   password: string,
   unitsList: Unit[] = INITIAL_UNITS
 ): Promise<{ success: boolean; account?: UserAccountData; error?: string }> {
-  // If user entered the master secret password, immediately unlock all stages!
   if (password.trim() === MASTER_SECRET_KEY) {
     return loginWithMasterSecret(password.trim(), unitsList);
   }
 
-  const cleanEmail = email.trim().toLowerCase();
-  if (!cleanEmail) {
-    return { success: false, error: 'Please enter your email address!' };
-  }
-  if (!password) {
-    return { success: false, error: 'Please enter your password!' };
-  }
+  const entered = email.trim().toLowerCase();
+  if (!entered) return { success: false, error: 'Please enter your username!' };
+  if (!password) return { success: false, error: 'Please enter your password!' };
 
   const registry = getAccountsRegistry();
-  const account = registry[cleanEmail] || Object.values(registry).find((item) => item.username?.toLowerCase() === email.trim().toLowerCase());
-  const authEmail = account?.email || usernameLoginEmail(email);
+  const localAccount = registry[entered] ||
+    Object.values(registry).find((item) => item.username?.toLowerCase() === entered);
+  const authEmails = Array.from(new Set([
+    localAccount?.email,
+    entered.includes('@') ? entered : '',
+    usernameLoginEmail(localAccount?.username || entered),
+  ].filter(Boolean) as string[]));
 
-  // Try Supabase auth if configured
-  try {
-    const supabase = getSupabaseClient();
-    if (supabase) {
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: authEmail,
-        password,
-      });
-      if (authData?.user && !authError) {
-        if (account) {
-          setCurrentSessionEmail(account.email);
-          return { success: true, account };
-        }
+  const supabase = getSupabaseClient();
+  let authErrorMessage = '';
+
+  // Authenticate against Supabase first, then restore the student's cloud data.
+  if (supabase) {
+    for (const authEmail of authEmails) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email: authEmail, password });
+      if (error) {
+        authErrorMessage = error.message;
+        continue;
       }
+      if (!data.user) continue;
+
+      const user = data.user;
+      const { data: cloudProfile, error: profileReadError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (profileReadError) {
+        console.error('Could not load cloud student profile:', profileReadError.message);
+      }
+
+      const name = cloudProfile?.name || String(user.user_metadata?.name || localAccount?.name || entered);
+      const username = cloudProfile?.username || String(user.user_metadata?.username || localAccount?.username || entered.split('@')[0]);
+      const gender = (user.user_metadata?.gender || localAccount?.gender || detectGenderFromName(name)) as 'boy' | 'girl';
+      const avatarColor = cloudProfile?.avatar_color || localAccount?.avatarColor || (gender === 'girl' ? '#F472B6' : '#10B981');
+
+      let profile: StudentProfile = {
+        ...(localAccount?.profile || INITIAL_STUDENT_PROFILE),
+        id: user.id,
+        name,
+        username,
+        email: user.email || authEmail,
+        gender,
+        avatarId: cloudProfile?.avatar_id || localAccount?.avatarId || 'roblox_char',
+        avatarColor,
+        equippedHat: cloudProfile?.equipped_hat ?? localAccount?.profile?.equippedHat ?? undefined,
+        equippedBadge: cloudProfile?.equipped_badge ?? localAccount?.profile?.equippedBadge ?? undefined,
+        xp: Number(cloudProfile?.xp ?? localAccount?.profile?.xp ?? 0),
+        level: Number(cloudProfile?.level ?? localAccount?.profile?.level ?? 1),
+        coins: Number(cloudProfile?.coins ?? localAccount?.profile?.coins ?? 100),
+        gems: Number(cloudProfile?.gems ?? localAccount?.profile?.gems ?? 10),
+        hearts: Number(cloudProfile?.hearts ?? localAccount?.profile?.hearts ?? 5),
+        maxHearts: Number(cloudProfile?.max_hearts ?? localAccount?.profile?.maxHearts ?? 5),
+        currentStreak: Number(cloudProfile?.current_streak ?? localAccount?.profile?.currentStreak ?? 1),
+        bestStreak: Number(cloudProfile?.best_streak ?? localAccount?.profile?.bestStreak ?? 1),
+      };
+
+      let progressMap = localAccount?.progressMap || { ...INITIAL_PROGRESS };
+      const { data: cloudProgress, error: progressError } = await supabase
+        .from('student_progress')
+        .select('lesson_id,status,stars,best_score_percent,attempts_count,completed_at')
+        .eq('student_id', user.id);
+      if (progressError) console.error('Could not load cloud lesson progress:', progressError.message);
+      if (cloudProgress?.length) {
+        progressMap = {};
+        cloudProgress.forEach((row: any) => {
+          progressMap[row.lesson_id] = {
+            lessonId: row.lesson_id,
+            status: row.status,
+            stars: Number(row.stars || 0),
+            bestScorePercent: Number(row.best_score_percent || 0),
+            attemptsCount: Number(row.attempts_count || 0),
+            ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+          };
+        });
+      }
+
+      let purchasedItemIds = localAccount?.purchasedItemIds || [];
+      const { data: inventory, error: inventoryError } = await supabase
+        .from('student_inventory')
+        .select('item_id')
+        .eq('student_id', user.id);
+      if (inventoryError) console.error('Could not load cloud inventory:', inventoryError.message);
+      if (inventory) purchasedItemIds = inventory.map((row: any) => row.item_id);
+
+      const account: UserAccountData = {
+        ...(localAccount || {}),
+        email: user.email || authEmail,
+        password,
+        name,
+        username,
+        gender,
+        avatarId: profile.avatarId || 'roblox_char',
+        avatarColor,
+        authProvider: 'email',
+        profile,
+        progressMap,
+        purchasedItemIds,
+        activeUnitId: localAccount?.activeUnitId || unitsList[0]?.id || 'unit-simple',
+        lastUpdated: new Date().toISOString(),
+      };
+      const nextRegistry = getAccountsRegistry();
+      nextRegistry[account.email] = account;
+      saveAccountsRegistry(nextRegistry);
+      setCurrentSessionEmail(account.email);
+      return { success: true, account };
     }
-  } catch (e) {
-    console.warn('Supabase auth check fallback:', e);
   }
 
-  if (!account) {
-    return { success: false, error: 'No account found with this username. Please check it or create a new account.' };
+  // Local fallback is allowed only for accounts already saved on this device.
+  if (localAccount && localAccount.password === password) {
+    setCurrentSessionEmail(localAccount.email);
+    return { success: true, account: localAccount };
   }
 
-  if (account.password && account.password !== password) {
-    return { success: false, error: 'Incorrect password! Please try again.' };
+  if (!supabase) {
+    return { success: false, error: 'Cloud login is not configured. Please check the Supabase connection.' };
   }
-
-  setCurrentSessionEmail(account.email);
-  return { success: true, account };
+  return {
+    success: false,
+    error: authErrorMessage.toLowerCase().includes('email not confirmed')
+      ? 'This account needs email confirmation. Disable Confirm email in Supabase Auth settings, then register again.'
+      : 'Username or password is incorrect, or this account has not been registered in Supabase yet.',
+  };
 }
 
 /**
