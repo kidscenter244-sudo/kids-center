@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Zap, Heart, CheckCircle2, Play, ArrowLeft, Calendar, AlertCircle } from 'lucide-react';
 import { StudentProfile } from '../../types';
 import { sounds } from '../../services/soundEffects';
@@ -7,6 +7,8 @@ import confetti from 'canvas-confetti';
 interface PracticeArenaProps {
   profile: StudentProfile;
   onRestoreHeart: (xpGain: number) => void;
+  completedDrillIds?: string[];
+  onDrillCompleted?: (dailyKey: string) => void;
 }
 
 interface MiniDrill {
@@ -98,7 +100,7 @@ function saveCompletedDrillToStorage(drillId: string): void {
   }
 }
 
-export const PracticeArena: React.FC<PracticeArenaProps> = ({ profile, onRestoreHeart }) => {
+export const PracticeArena: React.FC<PracticeArenaProps> = ({ profile, onRestoreHeart, completedDrillIds = [], onDrillCompleted }) => {
   const [activeDrill, setActiveDrill] = useState<MiniDrill | null>(null);
   const [drillIndex, setDrillIndex] = useState(0);
   const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
@@ -115,6 +117,26 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({ profile, onRestore
     });
     return map;
   });
+
+  useEffect(() => {
+    const today = getTodayDateString();
+    const stored = loadCompletedDrillsFromStorage();
+    let changed = false;
+    completedDrillIds.forEach((key) => {
+      if (key.endsWith(`_${today}`) && stored[key] !== today) {
+        stored[key] = today;
+        changed = true;
+      }
+    });
+    if (changed) {
+      try { localStorage.setItem(STORAGE_KEY_DAILY_DRILLS, JSON.stringify(stored)); } catch (_) {}
+    }
+    const next: Record<string, boolean> = {};
+    MATH_DRILLS.forEach((drill) => {
+      next[drill.id] = stored[`${drill.id}_${today}`] === today || completedDrillIds.includes(`${drill.id}_${today}`);
+    });
+    setCompletedTodayMap(next);
+  }, [completedDrillIds]);
 
   const completedCountToday = MATH_DRILLS.filter((d) => completedTodayMap[d.id]).length;
   const isAllDrillsCompletedToday = completedCountToday === MATH_DRILLS.length;
@@ -158,6 +180,7 @@ export const PracticeArena: React.FC<PracticeArenaProps> = ({ profile, onRestore
       setIsChecked(false);
     } else {
       saveCompletedDrillToStorage(activeDrill.id);
+      onDrillCompleted?.(`${activeDrill.id}_${getTodayDateString()}`);
       setCompletedTodayMap((prev) => ({ ...prev, [activeDrill.id]: true }));
 
       setDrillCompleted(true);
