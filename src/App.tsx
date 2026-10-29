@@ -4,7 +4,7 @@
  * energy hearts kick-out mechanics, human student avatars, and multi-device account persistence.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Unit, 
   Lesson, 
@@ -66,6 +66,8 @@ export default function App() {
       const local = getAccountByEmail(user.email);
       const gameState = user.user_metadata?.game_state;
       if (!gameState || !gameState.profile) return;
+      lastRemoteSavedAt.current = String(gameState.savedAt || '');
+      setCompletedPracticeDrills(Array.isArray(gameState.completedPracticeDrills) ? gameState.completedPracticeDrills : []);
 
       const cloudProfile = gameState.profile as StudentProfile;
       const restored: UserAccountData = {
@@ -133,6 +135,10 @@ export default function App() {
   const [activeUnitId, setActiveUnitId] = useState<string>(activeAccount?.activeUnitId || units[0]?.id || 'unit-simple');
   const [activeTab, setActiveTab] = useState<string>('path');
   const [realLeaderboardUsers, setRealLeaderboardUsers] = useState<import('./types').LeaderboardUser[]>([]);
+  const lastRemoteSavedAt = useRef('');
+  const applyingRemoteState = useRef(false);
+  const [completedPracticeDrills, setCompletedPracticeDrills] = useState<string[]>([]);
+
 
   // Only show students actually present in Supabase; never show seeded/demo leaderboard users.
   useEffect(() => {
@@ -160,7 +166,8 @@ export default function App() {
           name: row.name || row.username || 'Student',
           avatarId: row.avatar_id || 'roblox_char',
           avatarColor: row.avatar_color || '#10B981',
-          xpThisWeek: Number(row.xp || 0),
+          // Prefer the current in-memory XP for the signed-in student.
+          xpThisWeek: row.id === profile.id ? Number(profile.xp || 0) : Number(row.xp || 0),
           streak: Number(row.current_streak || 0),
           league: 'Gold' as const,
           isCurrentUser: row.id === profile.id,
@@ -172,20 +179,54 @@ export default function App() {
   }, [profile.id, profile.xp, profile.currentStreak]);
   const [activeLessonForPlayer, setActiveLessonForPlayer] = useState<Lesson | null>(null);
 
+  // Refresh cloud state every 2.5 seconds so changes on another device appear without reload.
+  useEffect(() => {
+    if (!isLoggedIn) return;
+    const supabase = getSupabaseClient();
+    if (!supabase) return;
+    let cancelled = false;
+    const refreshFromCloud = async () => {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      if (cancelled || error || !user?.email) return;
+      const gameState = user.user_metadata?.game_state;
+      if (!gameState?.profile || !gameState.savedAt) return;
+      const savedAt = String(gameState.savedAt);
+      if (savedAt <= lastRemoteSavedAt.current) return;
+      lastRemoteSavedAt.current = savedAt;
+      applyingRemoteState.current = true;
+      setProfile((prev) => ({ ...prev, ...(gameState.profile as StudentProfile) }));
+      if (gameState.progressMap) setProgressMap(gameState.progressMap as Record<string, LessonProgress>);
+      if (Array.isArray(gameState.purchasedItemIds)) setPurchasedItemIds(gameState.purchasedItemIds);
+      if (gameState.activeUnitId) setActiveUnitId(String(gameState.activeUnitId));
+      if (Array.isArray(gameState.completedPracticeDrills)) setCompletedPracticeDrills(gameState.completedPracticeDrills);
+      window.setTimeout(() => { applyingRemoteState.current = false; }, 0);
+    };
+    void refreshFromCloud();
+    const timer = window.setInterval(() => { void refreshFromCloud(); }, 2500);
+    const onFocus = () => { void refreshFromCloud(); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [isLoggedIn]);
+
   // Sync state continuously to user's persistent account
   useEffect(() => {
     // Never save default/anonymous state or a hard-coded demo account to the cloud.
     // This also prevents the first render from overwriting the cloud snapshot while
     // the authenticated session is still being restored.
-    if (!isLoggedIn || !profile.email) return;
+    if (!isLoggedIn || !profile.email || applyingRemoteState.current) return;
     saveCurrentAccountState(profile.email, {
       profile,
       progressMap,
       purchasedItemIds,
       activeUnitId,
       units,
+      completedPracticeDrills,
     });
-  }, [isLoggedIn, profile, progressMap, purchasedItemIds, activeUnitId, units]);
+  }, [isLoggedIn, profile, progressMap, purchasedItemIds, activeUnitId, units, completedPracticeDrills]);
 
   const activeUnit = units.find((u) => u.id === activeUnitId) || units[0];
 
@@ -462,6 +503,8 @@ export default function App() {
           {activeTab === 'practice' && (
             <PracticeArena
               profile={profile}
+              completedDrillIds={completedPracticeDrills}
+              onDrillCompleted={(drillId) => setCompletedPracticeDrills((prev) => prev.includes(drillId) ? prev : [...prev, drillId])}
               onRestoreHeart={handleRestoreHeartFromPractice}
             />
           )}
