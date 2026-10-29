@@ -643,6 +643,7 @@ async function persistCloudState(email: string, state: CloudGameState): Promise<
   });
   if (metadataError) {
     console.error('Supabase game-state metadata sync failed:', metadataError.message);
+    throw new Error(`Supabase game-state metadata sync failed: ${metadataError.message}`);
   }
 
   // Keep the normalized tables in sync too. A missing INSERT policy may reject this
@@ -655,11 +656,24 @@ async function persistCloudState(email: string, state: CloudGameState): Promise<
     username: state.profile.username,
     avatar_id: state.profile.avatarId || 'roblox_char',
     avatar_color: state.profile.avatarColor,
+    equipped_hat: state.profile.equippedHat ?? null,
+    equipped_badge: state.profile.equippedBadge ?? null,
     xp: state.profile.xp,
+    level: state.profile.level,
+    coins: state.profile.coins,
+    gems: state.profile.gems,
+    hearts: state.profile.hearts,
+    max_hearts: state.profile.maxHearts,
     current_streak: state.profile.currentStreak,
+    best_streak: state.profile.bestStreak,
     role: state.profile.role || 'student',
+    updated_at: savedAt,
   }, { onConflict: 'id' });
-  if (profileError) console.error('Supabase profile sync failed:', profileError.message);
+  if (profileError) {
+    console.error('Supabase profile sync failed:', profileError.message);
+    // Do not pretend the normalized Supabase profile was saved successfully.
+    throw new Error(`Supabase profile sync failed: ${profileError.message}`);
+  }
 
   const progressRows = Object.values(state.progressMap).map((progress) => ({
     student_id: user.id,
