@@ -352,8 +352,13 @@ export async function loginWithEmail(
       const gender = (user.user_metadata?.gender || localAccount?.gender || detectGenderFromName(name)) as 'boy' | 'girl';
       const avatarColor = cloudProfile?.avatar_color || localAccount?.avatarColor || (gender === 'girl' ? '#F472B6' : '#10B981');
 
+      // The auth user's metadata is our schema-independent source of truth for game state.
+      // This avoids losing hearts/coins when the public profiles table lacks newer columns.
+      const cloudGameState = (user.user_metadata?.game_state || {}) as Partial<UserAccountData>;
+      const cloudSavedProfile = (cloudGameState.profile || {}) as Partial<StudentProfile>;
       let profile: StudentProfile = {
         ...(localAccount?.profile || INITIAL_STUDENT_PROFILE),
+        ...cloudSavedProfile,
         id: user.id,
         name,
         username,
@@ -363,17 +368,17 @@ export async function loginWithEmail(
         avatarColor,
         equippedHat: cloudProfile?.equipped_hat ?? localAccount?.profile?.equippedHat ?? undefined,
         equippedBadge: cloudProfile?.equipped_badge ?? localAccount?.profile?.equippedBadge ?? undefined,
-        xp: Number(cloudProfile?.xp ?? localAccount?.profile?.xp ?? 0),
-        level: Number(cloudProfile?.level ?? localAccount?.profile?.level ?? 1),
-        coins: Number(cloudProfile?.coins ?? localAccount?.profile?.coins ?? 100),
-        gems: Number(cloudProfile?.gems ?? localAccount?.profile?.gems ?? 10),
-        hearts: Number(cloudProfile?.hearts ?? localAccount?.profile?.hearts ?? 5),
-        maxHearts: Number(cloudProfile?.max_hearts ?? localAccount?.profile?.maxHearts ?? 5),
-        currentStreak: Number(cloudProfile?.current_streak ?? localAccount?.profile?.currentStreak ?? 1),
-        bestStreak: Number(cloudProfile?.best_streak ?? localAccount?.profile?.bestStreak ?? 1),
+        xp: Number(cloudSavedProfile.xp ?? cloudProfile?.xp ?? localAccount?.profile?.xp ?? 0),
+        level: Number(cloudSavedProfile.level ?? cloudProfile?.level ?? localAccount?.profile?.level ?? 1),
+        coins: Number(cloudSavedProfile.coins ?? cloudProfile?.coins ?? localAccount?.profile?.coins ?? 100),
+        gems: Number(cloudSavedProfile.gems ?? cloudProfile?.gems ?? localAccount?.profile?.gems ?? 10),
+        hearts: Number(cloudSavedProfile.hearts ?? cloudProfile?.hearts ?? localAccount?.profile?.hearts ?? 5),
+        maxHearts: Number(cloudSavedProfile.maxHearts ?? cloudProfile?.max_hearts ?? localAccount?.profile?.maxHearts ?? 5),
+        currentStreak: Number(cloudSavedProfile.currentStreak ?? cloudProfile?.current_streak ?? localAccount?.profile?.currentStreak ?? 1),
+        bestStreak: Number(cloudSavedProfile.bestStreak ?? cloudProfile?.best_streak ?? localAccount?.profile?.bestStreak ?? 1),
       };
 
-      let progressMap = localAccount?.progressMap || { ...INITIAL_PROGRESS };
+      let progressMap = cloudGameState.progressMap || localAccount?.progressMap || { ...INITIAL_PROGRESS };
       const { data: cloudProgress, error: progressError } = await supabase
         .from('student_progress')
         .select('lesson_id,status,stars,best_score_percent,attempts_count,completed_at')
@@ -393,7 +398,7 @@ export async function loginWithEmail(
         });
       }
 
-      let purchasedItemIds = localAccount?.purchasedItemIds || [];
+      let purchasedItemIds = cloudGameState.purchasedItemIds || localAccount?.purchasedItemIds || [];
       const { data: inventory, error: inventoryError } = await supabase
         .from('student_inventory')
         .select('item_id')
@@ -414,7 +419,7 @@ export async function loginWithEmail(
         profile,
         progressMap,
         purchasedItemIds,
-        activeUnitId: localAccount?.activeUnitId || unitsList[0]?.id || 'unit-simple',
+        activeUnitId: cloudGameState.activeUnitId || localAccount?.activeUnitId || unitsList[0]?.id || 'unit-simple',
         lastUpdated: new Date().toISOString(),
       };
       const nextRegistry = getAccountsRegistry();
@@ -637,6 +642,21 @@ export function saveCurrentAccountState(
 
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) return;
+
+      // Persist complete game state in Auth user metadata as a schema-independent fallback.
+      // This includes hearts, coins, gems, XP, level, progress, purchases and selected unit.
+      const { error: metadataError } = await supabase.auth.updateUser({
+        data: {
+          game_state: {
+            profile: state.profile,
+            progressMap: state.progressMap,
+            purchasedItemIds: state.purchasedItemIds,
+            activeUnitId: state.activeUnitId,
+            savedAt: new Date().toISOString(),
+          },
+        },
+      });
+      if (metadataError) console.error('Supabase game-state metadata sync failed:', metadataError.message);
 
       const { error: profileError } = await supabase.from('profiles').upsert({
         id: user.id,
