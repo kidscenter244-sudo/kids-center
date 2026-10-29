@@ -647,23 +647,17 @@ async function persistCloudState(email: string, state: CloudGameState): Promise<
 
   // Keep the normalized tables in sync too. A missing INSERT policy may reject this
   // upsert; that error is logged without discarding the metadata save above.
+  // Use only columns already consumed by the leaderboard. Sending optional/newer
+  // columns in one upsert can make PostgREST reject the entire row and leave XP at 0.
   const { error: profileError } = await supabase.from('profiles').upsert({
     id: user.id,
     name: state.profile.name,
     username: state.profile.username,
     avatar_id: state.profile.avatarId || 'roblox_char',
     avatar_color: state.profile.avatarColor,
-    equipped_hat: state.profile.equippedHat ?? null,
-    equipped_badge: state.profile.equippedBadge ?? null,
     xp: state.profile.xp,
-    level: state.profile.level,
-    coins: state.profile.coins,
-    gems: state.profile.gems,
-    hearts: state.profile.hearts,
-    max_hearts: state.profile.maxHearts,
     current_streak: state.profile.currentStreak,
-    best_streak: state.profile.bestStreak,
-    updated_at: savedAt,
+    role: state.profile.role || 'student',
   }, { onConflict: 'id' });
   if (profileError) console.error('Supabase profile sync failed:', profileError.message);
 
