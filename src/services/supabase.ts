@@ -16,10 +16,12 @@ export function getSupabaseCredentials(): { url: string; anonKey: string } {
   const storedUrl = typeof window !== 'undefined' ? localStorage.getItem('kcp_supabase_url') || '' : '';
   const storedKey = typeof window !== 'undefined' ? localStorage.getItem('kcp_supabase_key') || '' : '';
 
-  return {
-    url: storedUrl || envUrl,
-    anonKey: storedKey || envKey,
-  };
+  // Prefer the current Vercel build-time environment values. Older browsers may
+  // contain stale or incomplete credentials in localStorage from previous setup.
+  const url = envUrl.trim() || storedUrl.trim();
+  const anonKey = envKey.trim() || storedKey.trim();
+
+  return { url, anonKey };
 }
 
 export function setSupabaseCredentials(url: string, anonKey: string): void {
