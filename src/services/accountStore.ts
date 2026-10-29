@@ -658,8 +658,9 @@ export function saveCurrentAccountState(
       }, { onConflict: 'id' });
 
       if (profileError) {
+        // Continue attempting the other cloud writes so one table's policy/schema issue
+        // does not silently prevent every other sync operation.
         console.error('Supabase profile sync failed:', profileError.message);
-        return;
       }
 
       // Persist lesson progress in the cloud so it follows the student to another device.
