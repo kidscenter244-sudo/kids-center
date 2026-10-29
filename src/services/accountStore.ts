@@ -550,19 +550,61 @@ export function saveCurrentAccountState(
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) return;
 
-      const { error } = await supabase.from('profiles').upsert({
+      const { error: profileError } = await supabase.from('profiles').upsert({
         id: user.id,
         name: state.profile.name,
         username: state.profile.username,
+        avatar_id: state.profile.avatarId || 'roblox_char',
+        avatar_color: state.profile.avatarColor,
+        equipped_hat: state.profile.equippedHat ?? null,
+        equipped_badge: state.profile.equippedBadge ?? null,
         xp: state.profile.xp,
         level: state.profile.level,
         coins: state.profile.coins,
         gems: state.profile.gems,
         hearts: state.profile.hearts,
+        max_hearts: state.profile.maxHearts,
         current_streak: state.profile.currentStreak,
+        best_streak: state.profile.bestStreak,
+        updated_at: new Date().toISOString(),
       }, { onConflict: 'id' });
 
-      if (error) console.error('Supabase profile sync failed:', error.message);
+      if (profileError) {
+        console.error('Supabase profile sync failed:', profileError.message);
+        return;
+      }
+
+      // Persist lesson progress in the cloud so it follows the student to another device.
+      const progressRows = Object.values(state.progressMap).map((progress) => ({
+        student_id: user.id,
+        lesson_id: progress.lessonId,
+        status: progress.status,
+        stars: progress.stars,
+        best_score_percent: progress.bestScorePercent,
+        attempts_count: progress.attemptsCount,
+        completed_at: progress.completedAt ?? null,
+        updated_at: new Date().toISOString(),
+      }));
+
+      if (progressRows.length) {
+        const { error: progressError } = await supabase
+          .from('student_progress')
+          .upsert(progressRows, { onConflict: 'student_id,lesson_id' });
+        if (progressError) console.error('Supabase lesson progress sync failed:', progressError.message);
+      }
+
+      // Keep purchased items in the cloud too. Ignore duplicate items safely.
+      if (state.purchasedItemIds.length) {
+        const inventoryRows = state.purchasedItemIds.map((itemId) => ({
+          student_id: user.id,
+          item_id: itemId,
+          item_category: 'cosmetic',
+        }));
+        const { error: inventoryError } = await supabase
+          .from('student_inventory')
+          .upsert(inventoryRows, { onConflict: 'student_id,item_id' });
+        if (inventoryError) console.error('Supabase inventory sync failed:', inventoryError.message);
+      }
     } catch (err) {
       console.error('Supabase profile sync failed:', err);
     }
