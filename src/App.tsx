@@ -161,17 +161,31 @@ export default function App() {
         return;
       }
       if (!cancelled) {
-        setRealLeaderboardUsers((data || []).map((row: any) => ({
+        const students = (data || []).map((row: any) => ({
           id: row.id,
           name: row.name || row.username || 'Student',
           avatarId: row.avatar_id || 'roblox_char',
           avatarColor: row.avatar_color || '#10B981',
-          // Prefer the current in-memory XP for the signed-in student.
+          // Prefer live local XP for the signed-in student while the row syncs.
           xpThisWeek: row.id === profile.id ? Number(profile.xp || 0) : Number(row.xp || 0),
-          streak: Number(row.current_streak || 0),
+          streak: Number(row.id === profile.id ? profile.currentStreak : row.current_streak || 0),
           league: 'Gold' as const,
           isCurrentUser: row.id === profile.id,
-        })));
+        }));
+        // Keep the authenticated student visible even if their profiles row is not created yet.
+        if (profile.id && !students.some((student: any) => student.id === profile.id)) {
+          students.push({
+            id: profile.id,
+            name: profile.name || profile.username || 'Student',
+            avatarId: profile.avatarId || 'roblox_char',
+            avatarColor: profile.avatarColor || '#10B981',
+            xpThisWeek: Number(profile.xp || 0),
+            streak: Number(profile.currentStreak || 0),
+            league: 'Gold' as const,
+            isCurrentUser: true,
+          });
+        }
+        setRealLeaderboardUsers(students);
       }
     };
     void loadRealLeaderboard();
