@@ -136,7 +136,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>('path');
   const [realLeaderboardUsers, setRealLeaderboardUsers] = useState<import('./types').LeaderboardUser[]>([]);
   const lastRemoteSavedAt = useRef('');
-  const applyingRemoteState = useRef(false);
+  const skipNextCloudSave = useRef(false);
   const [completedPracticeDrills, setCompletedPracticeDrills] = useState<string[]>([]);
 
 
@@ -218,13 +218,13 @@ export default function App() {
       const savedAt = String(gameState.savedAt);
       if (savedAt <= lastRemoteSavedAt.current) return;
       lastRemoteSavedAt.current = savedAt;
-      applyingRemoteState.current = true;
+      skipNextCloudSave.current = true;
       setProfile((prev) => ({ ...prev, ...(gameState.profile as StudentProfile) }));
       if (gameState.progressMap) setProgressMap(gameState.progressMap as Record<string, LessonProgress>);
       if (Array.isArray(gameState.purchasedItemIds)) setPurchasedItemIds(gameState.purchasedItemIds);
       if (gameState.activeUnitId) setActiveUnitId(String(gameState.activeUnitId));
       if (Array.isArray(gameState.completedPracticeDrills)) setCompletedPracticeDrills(gameState.completedPracticeDrills);
-      window.setTimeout(() => { applyingRemoteState.current = false; }, 0);
+      // The next save effect is the state received from the cloud; don't echo it back.
     };
     void refreshFromCloud();
     const timer = window.setInterval(() => { void refreshFromCloud(); }, 2500);
@@ -242,7 +242,11 @@ export default function App() {
     // Never save default/anonymous state or a hard-coded demo account to the cloud.
     // This also prevents the first render from overwriting the cloud snapshot while
     // the authenticated session is still being restored.
-    if (!isLoggedIn || !profile.email || applyingRemoteState.current) return;
+    if (skipNextCloudSave.current) {
+      skipNextCloudSave.current = false;
+      return;
+    }
+    if (!isLoggedIn || !profile.email) return;
     saveCurrentAccountState(profile.email, {
       profile,
       progressMap,
