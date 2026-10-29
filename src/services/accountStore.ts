@@ -591,6 +591,7 @@ type CloudGameState = {
   progressMap: Record<string, LessonProgress>;
   purchasedItemIds: string[];
   activeUnitId: string;
+  completedPracticeDrills: string[];
 };
 
 let pendingCloudSave: { email: string; state: CloudGameState } | null = null;
@@ -632,6 +633,7 @@ async function persistCloudState(email: string, state: CloudGameState): Promise<
     progressMap: state.progressMap,
     purchasedItemIds: state.purchasedItemIds,
     activeUnitId: state.activeUnitId,
+    completedPracticeDrills: state.completedPracticeDrills,
     savedAt,
   };
 
@@ -704,6 +706,7 @@ export function saveCurrentAccountState(
     purchasedItemIds: string[];
     activeUnitId: string;
     units?: Unit[];
+    completedPracticeDrills?: string[];
   }
 ) {
   if (!email || typeof window === 'undefined') return;
@@ -744,6 +747,7 @@ export function saveCurrentAccountState(
     progressMap: state.progressMap,
     purchasedItemIds: state.purchasedItemIds,
     activeUnitId: state.activeUnitId,
+    completedPracticeDrills: state.completedPracticeDrills || [],
   });
 
 }
