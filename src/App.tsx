@@ -48,17 +48,52 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true);
 
   // 2. Authentication & Multi-Device Session State
-  const [activeAccount, setActiveAccount] = useState<UserAccountData | null>(() => {
-    const sessionEmail = getCurrentSessionEmail();
-    if (sessionEmail) {
-      return getAccountByEmail(sessionEmail);
-    }
-    return null;
-  });
+  // Do not trust the browser-only session flag as proof of a cloud login.
+  // A stale local session can show old hearts/XP on a second device.
+  const [activeAccount, setActiveAccount] = useState<UserAccountData | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
 
-  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
-    return Boolean(getCurrentSessionEmail());
-  });
+  // Restore only from a real Supabase session. If no authenticated cloud session
+  // exists, require login rather than silently opening stale browser-local data.
+  useEffect(() => {
+    let cancelled = false;
+    const restoreAuthenticatedSession = async () => {
+      const supabase = getSupabaseClient();
+      if (!supabase) return;
+      const { data, error } = await supabase.auth.getUser();
+      if (cancelled || error || !data.user?.email) return;
+      const user = data.user;
+      const local = getAccountByEmail(user.email);
+      const gameState = user.user_metadata?.game_state;
+      if (!gameState || !gameState.profile) return;
+
+      const cloudProfile = gameState.profile as StudentProfile;
+      const restored: UserAccountData = {
+        ...(local || {}),
+        email: user.email.toLowerCase(),
+        name: cloudProfile.name || String(user.user_metadata?.name || local?.name || user.email),
+        username: cloudProfile.username || String(user.user_metadata?.username || local?.username || user.email.split('@')[0]),
+        gender: (cloudProfile.gender || local?.gender || 'boy') as 'boy' | 'girl',
+        avatarId: cloudProfile.avatarId || local?.avatarId || 'roblox_char',
+        avatarColor: cloudProfile.avatarColor || local?.avatarColor || '#10B981',
+        authProvider: 'email',
+        profile: { ...INITIAL_STUDENT_PROFILE, ...cloudProfile, id: user.id, email: user.email },
+        progressMap: (gameState.progressMap || local?.progressMap || INITIAL_PROGRESS) as Record<string, LessonProgress>,
+        purchasedItemIds: (gameState.purchasedItemIds || local?.purchasedItemIds || []) as string[],
+        activeUnitId: String(gameState.activeUnitId || local?.activeUnitId || INITIAL_UNITS[0]?.id || 'unit-simple'),
+        lastUpdated: String(gameState.savedAt || new Date().toISOString()),
+      };
+      if (cancelled) return;
+      setActiveAccount(restored);
+      setProfile(restored.profile);
+      setProgressMap(restored.progressMap);
+      setPurchasedItemIds(restored.purchasedItemIds);
+      setActiveUnitId(restored.activeUnitId);
+      setIsLoggedIn(true);
+    };
+    void restoreAuthenticatedSession();
+    return () => { cancelled = true; };
+  }, []);
 
   // Teacher Protected PIN Access (PIN: 01068545095)
   const [isTeacherUnlocked, setIsTeacherUnlocked] = useState(false);
