@@ -11,7 +11,7 @@ interface LoginScreenProps {
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const [tab, setTab] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [studentName, setStudentName] = useState('Alex');
   const [manualGenderOverride, setManualGenderOverride] = useState<'boy' | 'girl' | null>(null);
@@ -52,8 +52,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
     setIsLoading(true);
     try {
       const res = tab === 'login'
-        ? await loginWithEmail(email, password)
-        : await registerAccount(email, password, studentName);
+        ? await loginWithEmail(username, password)
+        : await registerAccount(username, password, studentName);
       if (res.success && res.account) {
         if (tab === 'login') sounds.playCorrect(); else sounds.playFanfare();
         setSuccessMsg(tab === 'login' ? 'Signed in successfully! Restoring your progress...' : 'Welcome, champion! Your account has been created.');
@@ -111,11 +111,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           </>}
 
           <div>
-            <label className="block text-xs font-black uppercase text-slate-600 mb-1">Email Address</label>
+            <label className="block text-xs font-black uppercase text-slate-600 mb-1">Username</label>
             <div className="relative">
-              <input type="email" value={email} onChange={(e) => { setEmail(e.target.value); setErrorMsg(''); }} placeholder="student@example.com" required className="w-full p-3 pl-10 rounded-2xl border-2 border-slate-200 text-sm font-bold text-slate-800 focus:border-amber-500 focus:outline-hidden transition-colors" />
-              <Mail className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input type="text" value={username} onChange={(e) => { setUsername(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, '')); setErrorMsg(''); }} placeholder="e.g. alex123" minLength={3} autoComplete="username" required className="w-full p-3 pl-10 rounded-2xl border-2 border-slate-200 text-sm font-bold text-slate-800 focus:border-amber-500 focus:outline-hidden transition-colors" />
+              <User className="w-5 h-5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
             </div>
+            <p className="text-[10px] text-slate-400 mt-1">Remember your username and password to continue your progress on another device.</p>
           </div>
           <div>
             <label className="block text-xs font-black uppercase text-slate-600 mb-1">Password</label>
