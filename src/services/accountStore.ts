@@ -23,6 +23,13 @@ export interface UserAccountData {
 const STORAGE_KEY_ACCOUNTS = 'kcp_registered_accounts_v7_simple';
 const STORAGE_KEY_CURRENT_SESSION = 'kcp_current_session_email_v7_simple';
 
+// Usernames are used in the UI; Supabase Auth still requires an email-shaped identifier.
+// This internal alias is never shown to the student and does not require a real inbox.
+function usernameLoginEmail(username: string): string {
+  const normalized = username.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+  return `${normalized}@login.kidscenterpro.com`;
+}
+
 // Seed initial default accounts if none exist
 function getAccountsRegistry(): Record<string, UserAccountData> {
   if (typeof window === 'undefined') return {};
@@ -99,14 +106,15 @@ function saveAccountsRegistry(registry: Record<string, UserAccountData>) {
  * Register a new student account with automatic Roblox gender detection
  */
 export async function registerAccount(
-  email: string,
+  usernameInput: string,
   password: string,
   name: string
 ): Promise<{ success: boolean; account?: UserAccountData; error?: string }> {
-  const cleanEmail = email.trim().toLowerCase();
-  if (!cleanEmail || !cleanEmail.includes('@')) {
-    return { success: false, error: 'Please enter a valid email address!' };
+  const cleanUsername = usernameInput.trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
+  if (cleanUsername.length < 3) {
+    return { success: false, error: 'Username must be at least 3 characters (letters and numbers only)!' };
   }
+  const cleanEmail = usernameLoginEmail(cleanUsername);
   if (!password || password.length < 3) {
     return { success: false, error: 'Password must be at least 3 characters long!' };
   }
@@ -121,7 +129,7 @@ export async function registerAccount(
 
   // Automatic gender detection from name
   const gender = detectGenderFromName(name);
-  const username = name.trim().toLowerCase().replace(/\s+/g, '_') + '_' + Math.floor(Math.random() * 899 + 100);
+  const username = cleanUsername;
   const avatarColor = gender === 'girl' ? '#F472B6' : '#10B981';
 
   const newProfile: StudentProfile = {
@@ -292,19 +300,20 @@ export async function loginWithEmail(
   }
 
   const registry = getAccountsRegistry();
-  const account = registry[cleanEmail];
+  const account = registry[cleanEmail] || Object.values(registry).find((item) => item.username?.toLowerCase() === email.trim().toLowerCase());
+  const authEmail = account?.email || usernameLoginEmail(email);
 
   // Try Supabase auth if configured
   try {
     const supabase = getSupabaseClient();
     if (supabase) {
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: cleanEmail,
+        email: authEmail,
         password,
       });
       if (authData?.user && !authError) {
         if (account) {
-          setCurrentSessionEmail(cleanEmail);
+          setCurrentSessionEmail(account.email);
           return { success: true, account };
         }
       }
@@ -314,14 +323,14 @@ export async function loginWithEmail(
   }
 
   if (!account) {
-    return { success: false, error: 'No account found with this email. Would you like to create a new account?' };
+    return { success: false, error: 'No account found with this username. Please check it or create a new account.' };
   }
 
   if (account.password && account.password !== password) {
     return { success: false, error: 'Incorrect password! Please try again.' };
   }
 
-  setCurrentSessionEmail(cleanEmail);
+  setCurrentSessionEmail(account.email);
   return { success: true, account };
 }
 
