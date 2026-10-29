@@ -174,15 +174,18 @@ export default function App() {
 
   // Sync state continuously to user's persistent account
   useEffect(() => {
-    const userEmail = profile.email || 'hero@kidscenter.com';
-    saveCurrentAccountState(userEmail, {
+    // Never save default/anonymous state or a hard-coded demo account to the cloud.
+    // This also prevents the first render from overwriting the cloud snapshot while
+    // the authenticated session is still being restored.
+    if (!isLoggedIn || !profile.email) return;
+    saveCurrentAccountState(profile.email, {
       profile,
       progressMap,
       purchasedItemIds,
       activeUnitId,
       units,
     });
-  }, [profile, progressMap, purchasedItemIds, activeUnitId, units]);
+  }, [isLoggedIn, profile, progressMap, purchasedItemIds, activeUnitId, units]);
 
   const activeUnit = units.find((u) => u.id === activeUnitId) || units[0];
 
