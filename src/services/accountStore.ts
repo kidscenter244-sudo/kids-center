@@ -586,6 +586,113 @@ export async function loginWithFacebook(): Promise<{ success: boolean; account?:
   return { success: true, account };
 }
 
+type CloudGameState = {
+  profile: StudentProfile;
+  progressMap: Record<string, LessonProgress>;
+  purchasedItemIds: string[];
+  activeUnitId: string;
+};
+
+let pendingCloudSave: { email: string; state: CloudGameState } | null = null;
+let cloudSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let cloudSaveQueue: Promise<void> = Promise.resolve();
+
+function scheduleCloudStateSave(email: string, state: CloudGameState): void {
+  if (typeof window === 'undefined') return;
+  pendingCloudSave = { email, state };
+  if (cloudSaveTimer) clearTimeout(cloudSaveTimer);
+  // Coalesce rapid state changes (e.g. hearts + XP + coins) into one cloud write.
+  cloudSaveTimer = setTimeout(() => {
+    const snapshot = pendingCloudSave;
+    pendingCloudSave = null;
+    cloudSaveTimer = null;
+    if (!snapshot) return;
+    cloudSaveQueue = cloudSaveQueue
+      .then(() => persistCloudState(snapshot.email, snapshot.state))
+      .catch((error) => console.error('Supabase game-state sync failed:', error));
+  }, 500);
+}
+
+async function persistCloudState(email: string, state: CloudGameState): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+
+  const { data: { user }, error: userError } = await supabase.auth.getUser();
+  if (userError || !user) return;
+
+  // Never write one signed-in student's state under another student's account.
+  if (user.email && user.email.trim().toLowerCase() !== email.trim().toLowerCase()) {
+    console.warn('Skipped cloud save because the signed-in user does not match the active student.');
+    return;
+  }
+
+  const savedAt = new Date().toISOString();
+  const gameState = {
+    profile: state.profile,
+    progressMap: state.progressMap,
+    purchasedItemIds: state.purchasedItemIds,
+    activeUnitId: state.activeUnitId,
+    savedAt,
+  };
+
+  // Auth metadata is the fallback store for all game fields, including hearts.
+  const { error: metadataError } = await supabase.auth.updateUser({
+    data: { game_state: gameState },
+  });
+  if (metadataError) {
+    console.error('Supabase game-state metadata sync failed:', metadataError.message);
+  }
+
+  // Keep the normalized tables in sync too. A missing INSERT policy may reject this
+  // upsert; that error is logged without discarding the metadata save above.
+  const { error: profileError } = await supabase.from('profiles').upsert({
+    id: user.id,
+    name: state.profile.name,
+    username: state.profile.username,
+    avatar_id: state.profile.avatarId || 'roblox_char',
+    avatar_color: state.profile.avatarColor,
+    equipped_hat: state.profile.equippedHat ?? null,
+    equipped_badge: state.profile.equippedBadge ?? null,
+    xp: state.profile.xp,
+    level: state.profile.level,
+    coins: state.profile.coins,
+    gems: state.profile.gems,
+    hearts: state.profile.hearts,
+    max_hearts: state.profile.maxHearts,
+    current_streak: state.profile.currentStreak,
+    best_streak: state.profile.bestStreak,
+    updated_at: savedAt,
+  }, { onConflict: 'id' });
+  if (profileError) console.error('Supabase profile sync failed:', profileError.message);
+
+  const progressRows = Object.values(state.progressMap).map((progress) => ({
+    student_id: user.id,
+    lesson_id: progress.lessonId,
+    status: progress.status,
+    stars: progress.stars,
+    best_score_percent: progress.bestScorePercent,
+    attempts_count: progress.attemptsCount,
+    completed_at: progress.completedAt ?? null,
+    updated_at: savedAt,
+  }));
+  if (progressRows.length) {
+    const { error } = await supabase.from('student_progress')
+      .upsert(progressRows, { onConflict: 'student_id,lesson_id' });
+    if (error) console.error('Supabase lesson progress sync failed:', error.message);
+  }
+
+  if (state.purchasedItemIds.length) {
+    const inventoryRows = state.purchasedItemIds.map((itemId) => ({
+      student_id: user.id,
+      item_id: itemId,
+      item_category: 'cosmetic',
+    }));
+    const { error } = await supabase.from('student_inventory')
+      .upsert(inventoryRows, { onConflict: 'student_id,item_id' });
+    if (error) console.error('Supabase inventory sync failed:', error.message);
+  }
+}
+
 /**
  * Save user state persistently for their email account
  */
@@ -632,96 +739,14 @@ export function saveCurrentAccountState(
 
   saveAccountsRegistry(registry);
 
-  // Sync only when Supabase Auth has a real authenticated user.
-  // Local/demo IDs such as "student_..." are not UUIDs and cannot be used
-  // as profiles.id because that column references auth.users(id).
-  void (async () => {
-    try {
-      const supabase = getSupabaseClient();
-      if (!supabase) return;
+  scheduleCloudStateSave(cleanEmail, {
+    profile: state.profile,
+    progressMap: state.progressMap,
+    purchasedItemIds: state.purchasedItemIds,
+    activeUnitId: state.activeUnitId,
+  });
 
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
-      if (userError || !user) return;
-
-      // Persist complete game state in Auth user metadata as a schema-independent fallback.
-      // This includes hearts, coins, gems, XP, level, progress, purchases and selected unit.
-      const { error: metadataError } = await supabase.auth.updateUser({
-        data: {
-          game_state: {
-            profile: state.profile,
-            progressMap: state.progressMap,
-            purchasedItemIds: state.purchasedItemIds,
-            activeUnitId: state.activeUnitId,
-            savedAt: new Date().toISOString(),
-          },
-        },
-      });
-      if (metadataError) console.error('Supabase game-state metadata sync failed:', metadataError.message);
-
-      const { error: profileError } = await supabase.from('profiles').upsert({
-        id: user.id,
-        name: state.profile.name,
-        username: state.profile.username,
-        avatar_id: state.profile.avatarId || 'roblox_char',
-        avatar_color: state.profile.avatarColor,
-        equipped_hat: state.profile.equippedHat ?? null,
-        equipped_badge: state.profile.equippedBadge ?? null,
-        xp: state.profile.xp,
-        level: state.profile.level,
-        coins: state.profile.coins,
-        gems: state.profile.gems,
-        hearts: state.profile.hearts,
-        max_hearts: state.profile.maxHearts,
-        current_streak: state.profile.currentStreak,
-        best_streak: state.profile.bestStreak,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'id' });
-
-      if (profileError) {
-        // Continue attempting the other cloud writes so one table's policy/schema issue
-        // does not silently prevent every other sync operation.
-        console.error('Supabase profile sync failed:', profileError.message);
-      }
-
-      // Persist lesson progress in the cloud so it follows the student to another device.
-      const progressRows = Object.values(state.progressMap).map((progress) => ({
-        student_id: user.id,
-        lesson_id: progress.lessonId,
-        status: progress.status,
-        stars: progress.stars,
-        best_score_percent: progress.bestScorePercent,
-        attempts_count: progress.attemptsCount,
-        completed_at: progress.completedAt ?? null,
-        updated_at: new Date().toISOString(),
-      }));
-
-      if (progressRows.length) {
-        const { error: progressError } = await supabase
-          .from('student_progress')
-          .upsert(progressRows, { onConflict: 'student_id,lesson_id' });
-        if (progressError) console.error('Supabase lesson progress sync failed:', progressError.message);
-      }
-
-      // Keep purchased items in the cloud too. Ignore duplicate items safely.
-      if (state.purchasedItemIds.length) {
-        const inventoryRows = state.purchasedItemIds.map((itemId) => ({
-          student_id: user.id,
-          item_id: itemId,
-          item_category: 'cosmetic',
-        }));
-        const { error: inventoryError } = await supabase
-          .from('student_inventory')
-          .upsert(inventoryRows, { onConflict: 'student_id,item_id' });
-        if (inventoryError) console.error('Supabase inventory sync failed:', inventoryError.message);
-      }
-    } catch (err) {
-      console.error('Supabase profile sync failed:', err);
-    }
-  })();
 }
-
-/**
- * Read current session email
  */
 export function getCurrentSessionEmail(): string | null {
   if (typeof window === 'undefined') return null;
