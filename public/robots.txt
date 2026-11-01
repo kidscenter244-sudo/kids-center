@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://kids-center-kidscenter244-sudo.vercel.app/sitemap.xml
